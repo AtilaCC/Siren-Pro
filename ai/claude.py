@@ -16,44 +16,11 @@ import urllib.request
 
 from db.connection import get_db
 
-import re
-
 log = logging.getLogger("SIREN.ai")
 
 CLAUDE_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_API     = "https://api.anthropic.com/v1/messages"
 CLAUDE_MODEL   = "claude-sonnet-4-20250514"
-
-# ═══════════════════════════════════════
-# SAFE PARSE
-# ═══════════════════════════════════════
-
-_SIGNAL_FALLBACK = {
-    "signal": "wait",
-    "confidence": 0,
-    "edge": "weak",
-    "market_phase": "fake_move",
-    "scores": {"flow": 0, "narrative": 0, "price": 0},
-    "risk": "high",
-    "reason": "invalid_json",
-    "action_plan": {"entry_type": "avoid", "confidence_zone": "low"},
-}
-
-_SIGNAL_REQUIRED = set(_SIGNAL_FALLBACK.keys())
-
-
-def safe_parse(text: str) -> dict:
-    """Parse JSON da resposta Claude com limpeza de markdown e validação de campos."""
-    try:
-        cleaned = re.sub(r"```(?:json)?|```", "", text).strip()
-        result  = json.loads(cleaned)
-        if not _SIGNAL_REQUIRED.issubset(result.keys()):
-            log.warning(f"safe_parse: campos ausentes → fallback | keys={list(result.keys())}")
-            return dict(_SIGNAL_FALLBACK)
-        return result
-    except Exception as e:
-        log.warning(f"safe_parse falhou: {e} | text={text[:80]!r}")
-        return dict(_SIGNAL_FALLBACK)
 
 
 # ═══════════════════════════════════════
@@ -214,7 +181,7 @@ Responda SOMENTE em JSON puro, sem markdown, sem explicação extra:
     raw  = await loop.run_in_executor(None, lambda: _call_claude_sync(prompt, system=system, max_tokens=250))
 
     try:
-        result = json.loads(re.sub(r"```(?:json)?|```", "", raw).strip())
+        result = json.loads(raw)
         _save_claude_analysis(token["sym"], "market_analysis", result.get("verdict", "?"), result.get("reasoning", ""), raw)
         return result
     except Exception:
@@ -249,7 +216,7 @@ Responda SOMENTE: {{"send":true,"reason":"motivo breve"}} ou {{"send":false,"rea
     loop = asyncio.get_running_loop()
     raw  = await loop.run_in_executor(None, lambda: _call_claude_sync(prompt, max_tokens=100))
     try:
-        result = json.loads(re.sub(r"```(?:json)?|```", "", raw).strip())
+        result = json.loads(raw)
         send   = result.get("send", True)
         reason = result.get("reason", "")
         if not send:
@@ -315,7 +282,7 @@ Identifique padrões e responda em JSON puro:
     loop = asyncio.get_running_loop()
     raw  = await loop.run_in_executor(None, lambda: _call_claude_sync(prompt, system=system, max_tokens=350))
     try:
-        insights = json.loads(re.sub(r"```(?:json)?|```", "", raw).strip())
+        insights = json.loads(raw)
         _save_claude_analysis("*", "learning", "INSIGHTS", str(insights), raw)
         log.info(
             f"Claude learning: {insights.get('suggestion','')} | "
@@ -356,87 +323,11 @@ Responda em JSON:
     loop = asyncio.get_running_loop()
     raw  = await loop.run_in_executor(None, lambda: _call_claude_sync(prompt, max_tokens=250))
     try:
-        result = json.loads(re.sub(r"```(?:json)?|```", "", raw).strip())
+        result = json.loads(raw)
         _save_claude_analysis("*", "narrative", result.get("dominant_narrative", "?"), result.get("insight", ""), raw)
         return result
     except Exception:
         return {}
-
-
-# ═══════════════════════════════════════
-# MÓDULO INSTITUCIONAL
-# ═══════════════════════════════════════
-
-async def claude_analyze_institutional(token: dict, narrative: dict = None, flow: dict = None) -> dict:
-    """
-    Análise institucional de um token usando o prompt de hedge fund.
-    Retorna dict com: signal, confidence, edge, market_phase, scores, risk, reason, action_plan.
-    Só consulta a IA para tokens S-Tier ou score >= 70.
-    """
-    if not CLAUDE_API_KEY:
-        return safe_parse("")
-
-    if token.get("score", 0) < 70 and token.get("tier") != "S":
-        return safe_parse("")
-
-    from core.scoring import get_btc_context
-    from ai.institutional_prompt import SYSTEM_PROMPT
-
-    btc_ctx = get_btc_context()
-
-    payload = {
-        "token": {
-            "sym":               token.get("sym"),
-            "price":             token.get("price", 0),
-            "chg":               token.get("chg", 0),
-            "vol":               token.get("vol", 0),
-            "liq":               token.get("liq", 0),
-            "vm":                token.get("vm", 0),
-            "rsi":               token.get("rsi", 50),
-            "holders":           token.get("holders", 0),
-            "score":             token.get("score", 0),
-            "tier":              token.get("tier", "C"),
-            "gc":                token.get("gc", False),
-            "gc_real":           token.get("gc_real", False),
-            "fr":                token.get("fr", 0),
-            "fr_real":           token.get("fr_real", False),
-            "pre":               token.get("pre", False),
-            "pre_conf":          token.get("pre_conf", 0),
-            "vol_growth":        token.get("vol_growth", 0),
-            "price_compression": token.get("price_compression", 0),
-        },
-        "narrative": narrative or {},
-        "flow": flow or {
-            "whale_buys":         token.get("whale_buys", 0),
-            "whale_sells":        token.get("whale_sells", 0),
-            "accumulation_score": token.get("score", 50),
-        },
-        "price_action": {
-            "structure":   "breakout" if token.get("gc") else "range",
-            "above_ma21":  token.get("gc", False),
-            "bb_squeeze":  (token.get("price_compression", 10) < 4),
-        },
-        "btc": {
-            "trend":  btc_ctx.get("trend", "neutral"),
-            "chg_4h": btc_ctx.get("chg_4h", 0),
-            "rsi":    btc_ctx.get("rsi", 50),
-        },
-    }
-
-    loop = asyncio.get_running_loop()
-    raw  = await loop.run_in_executor(
-        None,
-        lambda: _call_claude_sync(json.dumps(payload), system=SYSTEM_PROMPT, max_tokens=300),
-    )
-
-    result = safe_parse(raw)
-    _save_claude_analysis(
-        token.get("sym", "?"), "institutional",
-        result.get("signal", "wait"),
-        result.get("reason", ""),
-        raw,
-    )
-    return result
 
 
 # ═══════════════════════════════════════

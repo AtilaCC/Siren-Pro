@@ -33,7 +33,6 @@ from ai.claude import (
     claude_learn_from_results, claude_detect_narratives,
 )
 from db.connection import get_db
-from trading.risk_manager import approve_trade
 
 log = logging.getLogger("SIREN.engine")
 
@@ -42,7 +41,6 @@ TG_CHAT          = os.environ.get("TG_CHAT", "")
 INTERVAL_MINUTES = int(os.environ.get("INTERVAL_MINUTES", 30))
 ALERT_COOLDOWN   = int(os.environ.get("ALERT_COOLDOWN", 600))
 ALERT_MIN_SCORE  = int(os.environ.get("ALERT_MIN_SCORE", 65))
-RISK_BALANCE_USDT = float(os.environ.get("RISK_BALANCE_USDT", 1000.0))  # saldo simulado para RiskEngine
 
 
 # ═══════════════════════════════════════
@@ -318,13 +316,6 @@ async def send_alerts(session, tokens: list, narrative: dict = None):
                 skipped_low += 1
                 continue
             if not await claude_validate_alert(t, label_short, priority):
-                skipped_ai += 1
-                continue
-
-            # ── RiskEngine: aprovação obrigatória antes de qualquer execução ──
-            risk_ok, risk_result = approve_trade(t, RISK_BALANCE_USDT)
-            if not risk_ok:
-                log.info(f"RiskEngine bloqueou alerta {label_short} ${sym}: {risk_result}")
                 skipped_ai += 1
                 continue
 

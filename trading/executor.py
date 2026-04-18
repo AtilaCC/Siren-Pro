@@ -26,12 +26,7 @@ from db.connection import get_db
 
 log = logging.getLogger("SIREN.executor")
 
-# ── Modo de execução ─────────────────────────────────────────────────
-# False = paper trading (simulação, sem ordens reais)
-# True  = trading real (ordens reais na Binance)
-# Controle via variável de ambiente ENABLE_REAL_TRADING=true no Railway
-ENABLE_REAL_TRADING = os.environ.get("ENABLE_REAL_TRADING", "false").lower() == "true"
-ENABLE_REAL = ENABLE_REAL_TRADING  # alias para compatibilidade interna
+ENABLE_REAL = os.environ.get("ENABLE_REAL_TRADING", "false").lower() == "true"
 
 
 def execute_signal(token: dict, label: str, user_id: int = None) -> dict:
@@ -73,28 +68,15 @@ def execute_signal(token: dict, label: str, user_id: int = None) -> dict:
         return {"success": False, "error": reason}
 
     # ── 3. Executar ordem ─────────────────────────────────────────────────
-    if not ENABLE_REAL_TRADING:
-        # PAPER TRADING — simula execução sem enviar ordem real
-        order_id = f"PAPER-{int(time.time())}-{sym}"
-        exec_qty = position["qty"]
-        total    = position["usdt"]
-        log.info(
-            f"[PAPER] 🧾 Simulando ordem BUY {pair} | "
-            f"qty={exec_qty:.6f} | total=${total:.2f} | "
-            f"SL={position['stop_price']:.8f} TP={position['tp_price']:.8f} | "
-            f"risco=${position['risk_usdt']:.2f} | order_id={order_id}"
-        )
-    else:
-        # REAL TRADING — envia ordem real para a Binance
-        try:
-            order = market_buy(pair, position["usdt"])
-        except Exception as e:
-            log.error(f"Erro ao executar ordem {pair}: {e}")
-            return {"success": False, "error": str(e)}
+    try:
+        order = market_buy(pair, position["usdt"])
+    except Exception as e:
+        log.error(f"Erro ao executar ordem {pair}: {e}")
+        return {"success": False, "error": str(e)}
 
-        order_id = str(order.get("orderId", ""))
-        exec_qty = float(order.get("executedQty", position["qty"]))
-        total    = float(order.get("cummulativeQuoteQty", position["usdt"]))
+    order_id = str(order.get("orderId", ""))
+    exec_qty = float(order.get("executedQty", position["qty"]))
+    total    = float(order.get("cummulativeQuoteQty", position["usdt"]))
 
     log.info(
         f"[{mode}] ✅ Ordem executada: {pair} | qty={exec_qty} | "
