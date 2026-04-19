@@ -1575,12 +1575,20 @@ body.login-open {
         <button onclick="saveBackendUrl()" style="width:100%;background:linear-gradient(135deg,var(--a),var(--p));border:none;border-radius:8px;color:#000;font-family:'Orbitron',monospace;font-size:11px;font-weight:700;padding:10px;cursor:pointer">⚡ CONECTAR BACKEND</button>
       </div>
 
-      <!-- CLAUDE AI gerenciado pelo backend -->
-      <div style="background:linear-gradient(135deg,rgba(180,79,255,.08),rgba(0,245,255,.05));border:1px solid rgba(180,79,255,.3);border-radius:10px;padding:12px;margin-bottom:14px;text-align:center">
-        <span style="font-size:16px">🤖</span>
-        <div style="font-family:'Orbitron',monospace;font-size:11px;font-weight:700;color:var(--p);margin:6px 0 4px">CLAUDE AI — ANÁLISE REAL</div>
-        <div style="font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--m)">IA gerenciada pelo backend</div>
-        <div id="aiKeyStatus" style="margin-top:8px;display:inline-block;font-family:'Share Tech Mono',monospace;font-size:9px;padding:2px 10px;border-radius:8px;background:rgba(0,255,136,.15);color:var(--gr);border:1px solid rgba(0,255,136,.3)">✅ ATIVA</div>
+      <!-- CLAUDE AI KEY -->
+      <div style="background:linear-gradient(135deg,rgba(180,79,255,.08),rgba(0,245,255,.05));border:1px solid rgba(180,79,255,.3);border-radius:10px;padding:12px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">
+          <span style="font-size:16px">🤖</span>
+          <div style="font-family:'Orbitron',monospace;font-size:11px;font-weight:700;color:var(--p)">CLAUDE AI — ANÁLISE REAL</div>
+          <div id="aiKeyStatus" style="margin-left:auto;font-family:'Share Tech Mono',monospace;font-size:9px;padding:2px 8px;border-radius:8px;background:rgba(74,122,155,.2);color:var(--m)">INATIVA</div>
+        </div>
+        <div class="cfg-lbl">ANTHROPIC API KEY</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="password" id="cfgAiKey" class="cfg-input" placeholder="sk-ant-..." style="flex:1;margin-bottom:0">
+          <button id="aiKeyEye" onclick="toggleAiKeyVisibility()" style="background:var(--surface2);border:1px solid var(--border3);border-radius:4px;color:var(--muted2);padding:8px 10px;cursor:pointer;font-size:13px">👁</button>
+        </div>
+        <div class="cfg-hint">Chave em console.anthropic.com — salva só no seu dispositivo</div>
+        <button onclick="saveAiKey()" style="width:100%;background:linear-gradient(135deg,var(--p),var(--a));border:none;border-radius:6px;color:#000;font-family:'Orbitron',monospace;font-size:11px;font-weight:700;padding:10px;cursor:pointer;margin-top:4px">🤖 ATIVAR IA</button>
       </div>
 
       <!-- TELEGRAM gerenciado pelo backend -->
@@ -2040,26 +2048,82 @@ function toggleBkPanel(){
   document.getElementById('bkToggleTxt').textContent=bkPanelOpen?'▼':'▶';
 }
 
-function saveBackendUrl(){
+async function saveBackendUrl(){
   var url=(document.getElementById('cfgBackendUrl').value||'').trim().replace(/\/$/,'');
-  if(!url){alert('Cole a URL do Render.com');return;}
+  if(!url){alert('Cole a URL do Railway');return;}
   BACKEND_URL=url;
   localStorage.setItem('backend_url',url);
-  document.getElementById('bkStatus').textContent='TESTANDO...';
-  loadBackendData().then(function(ok){
-    document.getElementById('bkStatus').textContent=ok?'ONLINE':'ERRO';
-    document.getElementById('bkStatus').style.color=ok?'var(--gr)':'var(--r)';
-    if(ok)closeCfgModal();
-  });
+  var bkSt=document.getElementById('bkStatus');
+  if(bkSt){bkSt.textContent='CONECTANDO...';bkSt.style.color='var(--g)';}
+
+  var ok=await loadBackendData();
+  if(bkSt){bkSt.textContent=ok?'ONLINE':'ERRO';bkSt.style.color=ok?'var(--gr)':'var(--r)';}
+
+  if(ok){
+    // Buscar Claude API Key do Railway automaticamente
+    var keyStatus=document.getElementById('aiKeyStatus');
+    if(keyStatus){keyStatus.textContent='BUSCANDO...';keyStatus.style.color='var(--g)';}
+    try{
+      // Tenta /api/config primeiro
+      var endpoints=['/api/config','/config','/api/settings','/settings'];
+      var found=false;
+      for(var i=0;i<endpoints.length;i++){
+        try{
+          var rk=await fetch(BACKEND_URL+endpoints[i],{
+            headers:{Authorization:'Bearer '+AUTH_TOKEN},
+            signal:AbortSignal.timeout(4000)
+          });
+          if(rk.ok){
+            var dk=await rk.json();
+            var key=dk.claude_key||dk.ai_key||dk.anthropic_key||dk.CLAUDE_API_KEY||dk.ANTHROPIC_API_KEY||'';
+            if(key&&key.startsWith('sk-ant-')){
+              AI_KEY=key;
+              localStorage.setItem('ai_key',key);
+              updateAiKeyStatus(key);
+              updateHeaderAiStatus();
+              var fKey=document.getElementById('cfgAiKey');
+              if(fKey)fKey.value=key;
+              if(keyStatus){keyStatus.textContent='✅ ATIVA';keyStatus.style.color='var(--gr)';}
+              found=true;
+              break;
+            }
+          }
+        }catch(e2){}
+      }
+      if(!found&&keyStatus){keyStatus.textContent='MANUAL';keyStatus.style.color='var(--m)';}
+    }catch(e){
+      if(keyStatus){keyStatus.textContent='MANUAL';keyStatus.style.color='var(--m)';}
+    }
+    setTimeout(function(){closeCfgModal();},1200);
+  }
 }
 
 async function loadBackendData(){
   if(!BACKEND_URL)return false;
   try{
-    var r=await fetch(BACKEND_URL+'/api/summary',{signal:AbortSignal.timeout(8000)});
+    var r=await fetch(BACKEND_URL+'/api/summary',{
+      headers: AUTH_TOKEN ? {'Authorization':'Bearer '+AUTH_TOKEN} : {},
+      signal:AbortSignal.timeout(8000)
+    });
     if(!r.ok)return false;
     var d=await r.json();
     renderBackendPanel(d);
+    // Buscar AI Key do backend automaticamente
+    if(!AI_KEY){
+      try{
+        var rk=await fetch(BACKEND_URL+'/api/config',{
+          headers:{'Authorization':'Bearer '+AUTH_TOKEN},
+          signal:AbortSignal.timeout(5000)
+        });
+        if(rk.ok){
+          var dk=await rk.json();
+          if(dk.claude_key||dk.ai_key||dk.anthropic_key){
+            AI_KEY=dk.claude_key||dk.ai_key||dk.anthropic_key;
+            updateHeaderAiStatus();
+          }
+        }
+      }catch(e2){}
+    }
     // Atualizar status no config modal se estiver aberto
     var st=document.getElementById('bkStatus');
     if(st){st.textContent='ONLINE';st.style.color='var(--gr)';}
@@ -2904,12 +2968,17 @@ function renderAlerts(){
 // CONFIG MODAL
 // ═══════════════════════════════════════
 function openCfg(){
-  document.getElementById('cfgToken').value=localStorage.getItem('tg_token')||'';
-  document.getElementById('cfgChat').value=localStorage.getItem('tg_chat')||'';
+  // Campos opcionais — verificar existência antes de acessar
+  var fTok=document.getElementById('cfgToken');
+  var fChat=document.getElementById('cfgChat');
+  if(fTok) fTok.value=localStorage.getItem('tg_token')||'';
+  if(fChat) fChat.value=localStorage.getItem('tg_chat')||'';
   var k=localStorage.getItem('ai_key')||'';
-  document.getElementById('cfgAiKey').value=k;
+  var fKey=document.getElementById('cfgAiKey');
+  if(fKey) fKey.value=k;
   updateAiKeyStatus(k);
-  document.getElementById('cfgBackendUrl').value=localStorage.getItem('backend_url')||'';
+  var fUrl=document.getElementById('cfgBackendUrl');
+  if(fUrl) fUrl.value=localStorage.getItem('backend_url')||'';
   var bkSt=document.getElementById('bkStatus');
   if(bkSt){bkSt.textContent=BACKEND_URL?'ONLINE':'OFFLINE';bkSt.style.color=BACKEND_URL?'var(--gr)':'var(--m)';}
   document.getElementById('cfgOverlay').classList.add('open');
@@ -2918,8 +2987,11 @@ function openCfg(){
 function closeCfgOv(e){if(e.target===document.getElementById('cfgOverlay'))closeCfgModal();}
 function closeCfgModal(){document.getElementById('cfgOverlay').classList.remove('open');document.body.style.overflow='';}
 async function saveCfg(){
-  var tok=document.getElementById('cfgToken').value.trim();
-  var cht=document.getElementById('cfgChat').value.trim();
+  var fTok=document.getElementById('cfgToken');
+  var fChat=document.getElementById('cfgChat');
+  if(!fTok||!fChat){closeCfgModal();return;}
+  var tok=fTok.value.trim();
+  var cht=fChat.value.trim();
   if(!tok||!cht){alert('Preencha os dois campos!');return;}
   localStorage.setItem('tg_token',tok);localStorage.setItem('tg_chat',cht);
   TG_TOKEN=tok;TG_CHAT=cht;
@@ -2928,8 +3000,9 @@ async function saveCfg(){
 function clearCfg(){
   localStorage.removeItem('tg_token');localStorage.removeItem('tg_chat');localStorage.removeItem('ai_key');
   TG_TOKEN='';TG_CHAT='';AI_KEY='';
-  document.getElementById('cfgToken').value='';document.getElementById('cfgChat').value='';
-  document.getElementById('cfgAiKey').value='';
+  var fTok=document.getElementById('cfgToken');var fChat=document.getElementById('cfgChat');
+  var fKey=document.getElementById('cfgAiKey');
+  if(fTok)fTok.value='';if(fChat)fChat.value='';if(fKey)fKey.value='';
   updateAiKeyStatus('');
   updateHeaderAiStatus();
   alert('Dados limpos!');
@@ -2956,24 +3029,24 @@ async function saveAiKey(){
       localStorage.setItem('ai_key',k);AI_KEY=k;
       updateAiKeyStatus(k);updateHeaderAiStatus();
       btn.textContent='✅ IA ATIVADA!';
-      setTimeout(function(){btn.textContent='⚡ ATIVAR IA REAL';btn.disabled=false;},2000);
+      setTimeout(function(){btn.textContent='🤖 ATIVAR IA';btn.disabled=false;},2000);
     } else if(r.status===401){
       btn.textContent='❌ KEY INVÁLIDA';btn.disabled=false;
-      setTimeout(function(){btn.textContent='⚡ ATIVAR IA REAL';},2000);
+      setTimeout(function(){btn.textContent='🤖 ATIVAR IA';},2000);
       alert('API Key inválida ou sem créditos. Verifique em console.anthropic.com');
     } else {
       // Accept anyway on other errors (CORS etc)
       localStorage.setItem('ai_key',k);AI_KEY=k;
       updateAiKeyStatus(k);updateHeaderAiStatus();
       btn.textContent='✅ SALVA!';
-      setTimeout(function(){btn.textContent='⚡ ATIVAR IA REAL';btn.disabled=false;},2000);
+      setTimeout(function(){btn.textContent='🤖 ATIVAR IA';btn.disabled=false;},2000);
     }
   }catch(e){
     // Network error: save anyway
     localStorage.setItem('ai_key',k);AI_KEY=k;
     updateAiKeyStatus(k);updateHeaderAiStatus();
     btn.textContent='✅ SALVA!';
-    setTimeout(function(){btn.textContent='⚡ ATIVAR IA REAL';btn.disabled=false;},2000);
+    setTimeout(function(){btn.textContent='🤖 ATIVAR IA';btn.disabled=false;},2000);
   }
 }
 function updateAiKeyStatus(k){
@@ -3105,11 +3178,27 @@ async function runAI(t){
   document.getElementById('aiResult').style.display='none';
   document.getElementById('aiError').style.display='none';
   if(!AI_KEY){
-    runAILocal(t);
-    document.getElementById('aiLoading').style.display='none';
-    var txt=document.getElementById('aiText');
-    if(txt)txt.textContent='⚠ MODO LOCAL — Claude API não configurada.\n\nVá em ⚙ Configurações e insira sua Anthropic API Key para ativar análise real.\n\n'+txt.textContent;
-    return;
+    // Tenta buscar a key do backend antes de usar modo local
+    if(BACKEND_URL && AUTH_TOKEN){
+      try{
+        var rk=await fetch(BACKEND_URL+'/api/config',{
+          headers:{'Authorization':'Bearer '+AUTH_TOKEN},
+          signal:AbortSignal.timeout(5000)
+        });
+        if(rk.ok){
+          var dk=await rk.json();
+          if(dk.claude_key||dk.ai_key||dk.anthropic_key){
+            AI_KEY=dk.claude_key||dk.ai_key||dk.anthropic_key;
+            updateHeaderAiStatus();
+          }
+        }
+      }catch(e2){}
+    }
+    if(!AI_KEY){
+      runAILocal(t);
+      document.getElementById('aiLoading').style.display='none';
+      return;
+    }
   }
   try{
     var p10=moonProb(t,t.price*10),p100=moonProb(t,t.price*100);
