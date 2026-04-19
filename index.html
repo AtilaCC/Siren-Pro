@@ -1186,9 +1186,9 @@ body.login-open {
     <button class="fbtn" id="cf-base" onclick="setChain('base',this)">⚪ BASE</button>
   </div>
   <div class="notice" id="notice">⚡ Conectando à API Binance Alpha...</div>
-  <div id="smartNotice" style="display:none;background:linear-gradient(135deg,rgba(180,79,255,.08),rgba(0,245,255,.05));border:1px solid rgba(180,79,255,.4);border-radius:7px;padding:8px 12px;margin-bottom:8px;font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--p)">
-    🧠 FILTRO INTELIGENTE ATIVO — Score 88+ · BSC · FR negativo · RSI 40-72 · V/MC 50%+ · 3+ dias no Alpha<br>
-    <span style="color:var(--m);font-size:8px">Critérios com maior taxa histórica de acerto</span>
+  <div id="smartNotice" style="display:none;background:linear-gradient(135deg,rgba(0,255,136,.04),rgba(0,212,255,.03));border:1px solid rgba(0,255,136,.25);border-left:2px solid var(--primary);border-radius:4px;padding:10px 14px;margin-bottom:10px;font-family:var(--mono);font-size:10px;color:var(--text2)">
+    🧠 <span style="color:var(--primary);font-weight:700">INSTITUTIONAL SMART FILTER ATIVO</span><br>
+    <span style="font-size:9px;color:var(--muted2)">Smart Money 35% · Narrativa 30% · Price Action 20% − Risco 15% · Mínimo score 30</span>
   </div>
 
   <!-- BACKEND INTELLIGENCE PANEL -->
@@ -2321,14 +2321,49 @@ function render(){
     if(filt==='new')return t.hot;
     if(filt==='pre')return t.pre;
     if(filt==='smart'){
-      // Filtro Inteligente: regras baseadas em maior taxa de acerto histórico
-      var isStier = t.score >= 88;                  // Score alto
-      var isBSC   = t.chain === 'bsc';             // BSC mais confiável
-      var frNeg   = t.fundingRate < 0;              // Funding rate negativo = pressão de compra
-      var rsiOk   = t.rsi >= 40 && t.rsi <= 72;    // RSI não extremo
-      var volOk   = t.vm >= 50;                     // Volume/MC alto
-      var notNew  = t.daysInAlpha != null && t.daysInAlpha >= 3; // Não estreante (exclui tokens 'new')
-      return isStier && isBSC && frNeg && rsiOk && volOk && notNew;
+      // ── INSTITUTIONAL SMART FILTER ─────────────────────────────
+      // Based on: Smart Money (35%) + Narrative (30%) + Price Action (20%) - Risk (15%)
+
+      // 1. SMART MONEY (peso 35%)
+      var smScore = 0;
+      if(t.isVolSpike)              smScore += 40; // Volume spike vs baseline = whale activity
+      if(t.vol > 1e6)               smScore += 20; // Volume absoluto relevante
+      if(t.holders > 10000)         smScore += 20; // Muitos holders = distribuição saudável
+      if(t.fundingRate < 0)         smScore += 20; // FR negativo = longs pagando shorts = acumulação
+      smScore = Math.min(100, smScore);
+
+      // 2. NARRATIVE (peso 30%)
+      var narScore = 0;
+      if(t.hot)                     narScore += 30; // Token novo com tração = narrativa early
+      if(t.gc)                      narScore += 25; // Golden Cross = momentum confirmado
+      if(t.pre)                     narScore += 20; // Pré-pump: calma antes da explosão
+      if(t.chg > 5 && t.chg < 40)  narScore += 25; // Alta moderada = não saturado ainda
+      narScore = Math.min(100, narScore);
+
+      // 3. PRICE ACTION (peso 20%)
+      var paScore = 0;
+      if(t.chg > 0)                 paScore += 20; // Tendência positiva
+      if(t.rsi >= 40 && t.rsi <= 70) paScore += 30; // RSI zona saudável (confirmação secundária)
+      if(t.gc && t.vm > 40)         paScore += 30; // GC + volume = breakout real
+      if(t.rev)                     paScore += 20; // Reversão: queda forte com RSI oversold
+      paScore = Math.min(100, paScore);
+
+      // 4. RISK (quanto maior = pior, peso -15%)
+      var riskScore = 0;
+      if(t.chg > 50)                riskScore += 30; // Já subiu demais = overextended
+      if(t.rsi > 75)                riskScore += 25; // Overbought = risco de correção
+      if(t.vm < 20)                 riskScore += 25; // Baixo volume = fácil de manipular
+      if(t.fundingRate > 0.05)      riskScore += 20; // FR muito positivo = mercado eufórico
+      riskScore = Math.min(100, riskScore);
+
+      // FINAL SCORE institucional
+      var finalScore = (smScore * 0.35) + (narScore * 0.30) + (paScore * 0.20) - (riskScore * 0.15);
+
+      // Salva score institucional no token para exibição
+      t._instScore = Math.round(finalScore);
+
+      // Passa com score >= 30 (equivale a ter pelo menos 2-3 critérios fortes)
+      return finalScore >= 30;
     }
     return true;
   });
@@ -3080,29 +3115,67 @@ async function runAI(t){
     var p10=moonProb(t,t.price*10),p100=moonProb(t,t.price*100);
     var realMoon=calcRealMoonProb(t.sym,2);
     var vStats=getVerifiedStats();
-    var prompt='Você é um analista de criptomoedas experiente. Analise este token Binance Alpha com base nos dados reais abaixo. Seja direto, objetivo e honesto sobre riscos. Responda em português BR.\n\n'+
-      'TOKEN: $'+t.sym+' ('+t.name+')\n'+
-      'Preço: '+fp(t.price)+'\n'+
-      'Variação 24h: '+(t.chg>=0?'+':'')+t.chg.toFixed(2)+'%\n'+
-      'RSI(14): '+t.rsi+(t.rsiReal?' (calculado real de 50 candles 1h)':' (estimado)')+'\n'+
-      'Volume 24h: $'+fv(t.vol)+'\n'+
-      'Market Cap: $'+fv(t.mcap)+'\n'+
-      'Vol/MCap: '+t.vm+'%\n'+
-      'Liquidez: $'+fv(t.liq)+'\n'+
-      'Holders: '+fv(t.holders||0)+'\n'+
-      'Golden Cross (MA9>MA21): '+(t.gc?'SIM':'NÃO')+(t.gcReal?' (real)':' (estimado)')+'\n'+
-      (t.gcReal&&t.ma9?'MA9: '+fp(t.ma9)+' | MA21: '+fp(t.ma21)+'\n':'')+
-      'Funding Rate: '+(t.fundingRate>=0?'+':'')+t.fundingRate.toFixed(4)+'%'+(t.fundingRateReal?' (real Binance Futures)':' (estimado)')+'\n'+
-      'Chain: '+(t.chain||'desconhecida')+'\n'+
-      'Score SIREN: '+t.tier+'-Tier '+t.score+'/100\n'+
-      (t.top10pct!=null?'Concentração Top10: '+t.top10pct+'%\n':'')+
-      (t.daysInAlpha!=null?'Dias no Alpha: '+t.daysInAlpha+'\n':'')+
-      (realMoon!=null?'Probabilidade histórica 2x (baseada em '+getSnapshots().length+' snapshots): '+realMoon+'%\n':'')+
-      '\nResponda EXATAMENTE neste formato:\n'+
-      '🔥 PONTOS POSITIVOS:\n• [máximo 3 pontos]\n\n'+
-      '⚠️ RISCOS REAIS:\n• [máximo 3 riscos concretos, não genéricos]\n\n'+
-      '🎯 ESTRATÉGIA:\nEntrada: [preço/condição]\nStop Loss: [preço sugerido e %]\nAlvo 1: [preço e multiplicador]\nAlvo 2: [preço e multiplicador]\n\n'+
-      '📊 VEREDICTO: [COMPRA FORTE / COMPRA / NEUTRO / EVITAR] + explicação em 1 frase';
+    // Monta JSON institucional com todos os dados do token
+    var tokenJSON = {
+      token: t.sym,
+      price_data: {
+        current_price: t.price,
+        change_24h: t.chg,
+        structure: {
+          trend: t.chg > 5 ? 'up' : t.chg < -5 ? 'down' : 'sideways',
+          breakout: t.gc && t.isVolSpike ? true : false,
+          consolidation: t.pre ? true : false,
+          volatility: t.chg > 30 || t.chg < -30 ? 'high' : t.chg > 10 || t.chg < -10 ? 'medium' : 'low'
+        }
+      },
+      volume: {
+        current_1h: t.vol,
+        volume_spike: t.isVolSpike || false,
+        buy_pressure: t.vm ? t.vm / 100 : 0.5
+      },
+      market_cap: {
+        value: t.mcap || 0,
+        category: t.mcap > 50e6 ? 'high' : t.mcap > 5e6 ? 'mid' : 'low'
+      },
+      liquidity: {
+        depth: t.liq > 500000 ? 'high' : t.liq > 100000 ? 'medium' : 'low',
+        risk_level: t.liq > 500000 ? 'low' : t.liq > 100000 ? 'medium' : 'high'
+      },
+      social_data: {
+        narrative_stage: t.hot ? 'early' : t.pre ? 'growing' : 'unknown',
+        mentions_growth: t.hot ? 150 : 50
+      },
+      whale_data: {
+        large_transactions: t.vol > 5e6 ? 10 : t.vol > 1e6 ? 3 : 0,
+        net_flow: t.fundingRate < 0 ? 'inflow' : t.fundingRate > 0.05 ? 'outflow' : 'neutral',
+        wallet_concentration: t.holders > 10000 ? 'decreasing' : t.holders > 3000 ? 'stable' : 'increasing'
+      },
+      market_context: {
+        btc_trend: 'up',
+        market_phase: 'bull',
+        risk_on: true
+      },
+      extra: {
+        rsi: t.rsi,
+        rsi_real: t.rsiReal || false,
+        golden_cross: t.gc || false,
+        gc_real: t.gcReal || false,
+        funding_rate: t.fundingRate || 0,
+        funding_real: t.fundingRateReal || false,
+        holders: t.holders || 0,
+        chain: t.chain || 'unknown',
+        siren_score: t.score,
+        siren_tier: t.tier,
+        days_in_alpha: t.daysInAlpha || null,
+        reversal_signal: t.rev || false,
+        pre_pump: t.pre || false,
+        vol_mc_ratio: t.vm
+      }
+    };
+
+    var INSTITUTIONAL_SYSTEM = 'You are an institutional-grade crypto market intelligence engine specialized in high-volatility assets (memecoins, low caps, Binance Alpha opportunities).\n\nYour objective is to detect asymmetric opportunities BEFORE retail participants by analyzing behavior, not lagging indicators.\n\nCORE PRINCIPLE: Market moves are driven by: 1. Capital (Smart Money) 2. Narrative (Social + News) 3. Liquidity + Positioning\n\nSCORING MODEL — Score each 0-100:\nfinal_score = (smart_money * 0.35) + (narrative * 0.30) + (price_action * 0.20) - (risk * 0.15)\n\nSIGNAL: BUY = strong alignment + acceptable risk | SELL = distribution/exhaustion | HOLD = unclear\n\nYou MUST respond ONLY in valid JSON with this exact structure:\n{\n  \"signal\": \"BUY | SELL | HOLD\",\n  \"confidence\": 0-100,\n  \"market_phase\": \"BULL | SIDEWAYS | BEAR\",\n  \"scores\": { \"smart_money\": 0-100, \"narrative\": 0-100, \"price_action\": 0-100, \"risk\": 0-100 },\n  \"tags\": [],\n  \"entry_type\": \"BREAKOUT | DIP | SCALP\",\n  \"edge\": \"why this exists before retail\",\n  \"reason\": \"short institutional reasoning\",\n  \"entry_price\": \"price or condition\",\n  \"stop_loss\": \"price and %\",\n  \"target_1\": \"price and multiplier\",\n  \"target_2\": \"price and multiplier\"\n}\n\nDO NOT output anything outside JSON.';
+
+    var prompt = JSON.stringify(tokenJSON, null, 2);
 
     var response=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
@@ -3115,6 +3188,7 @@ async function runAI(t){
       body:JSON.stringify({
         model:'claude-haiku-4-5-20251001',
         max_tokens:1000,
+        system: INSTITUTIONAL_SYSTEM,
         messages:[{role:'user',content:prompt}]
       })
     });
@@ -3122,6 +3196,30 @@ async function runAI(t){
     var data=await response.json();
     var text=data.content.map(function(c){return c.text||'';}).join('\n').trim();
 
+    // Parse institutional JSON response
+    var aiData = null;
+    try {
+      var jsonStr = text.replace(/```json|```/g,'').trim();
+      aiData = JSON.parse(jsonStr);
+    } catch(e) { aiData = null; }
+
+    if(aiData) {
+      var signalColor = aiData.signal==='BUY' ? 'var(--gr)' : aiData.signal==='SELL' ? 'var(--r)' : 'var(--g)';
+      var signalEmoji = aiData.signal==='BUY' ? '🟢' : aiData.signal==='SELL' ? '🔴' : '🟡';
+      var tagsHtml = (aiData.tags||[]).map(function(tag){
+        return '<span style="background:rgba(0,255,136,.1);border:1px solid rgba(0,255,136,.25);border-radius:2px;padding:1px 6px;font-size:8px;color:var(--gr);font-family:var(--mono)">'+tag+'</span>';
+      }).join(' ');
+      var fs = aiData.scores ? Math.round((aiData.scores.smart_money*0.35)+(aiData.scores.narrative*0.30)+(aiData.scores.price_action*0.20)-(aiData.scores.risk*0.15)) : 0;
+      text =
+        signalEmoji+' <b>'+aiData.signal+'</b> · Confiança: <b>'+aiData.confidence+'%</b> · Score Final: <b>'+fs+'</b>\n\n'+
+        '⚡ EDGE: '+aiData.edge+'\n\n'+
+        '📋 REASONING: '+aiData.reason+'\n\n'+
+        '🎯 ENTRADA: '+(aiData.entry_price||'—')+'\n'+
+        '🛑 STOP LOSS: '+(aiData.stop_loss||'—')+'\n'+
+        '🎯 ALVO 1: '+(aiData.target_1||'—')+'\n'+
+        '🎯 ALVO 2: '+(aiData.target_2||'—')+'\n\n'+
+        '🏷 TAGS: '+(aiData.tags||[]).join(' · ');
+    }
     document.getElementById('aiText').textContent=text;
     document.getElementById('aiMetrics').innerHTML=[
       {l:'RSI'+(t.rsiReal?' ✓':''),v:t.rsi,c:t.rsi<30?'var(--gr)':t.rsi>70?'var(--r)':'var(--a)'},
@@ -3164,6 +3262,30 @@ function runAILocal(t){
     text+='\n⚠️ RISCOS:\n';
     neg.slice(0,3).forEach(function(n){text+='• '+n+'\n';});
     text+='\n🎯 ENTRADA:\n'+entrada+'\n\n📊 VEREDICTO:\n'+veredicto;
+    // Parse institutional JSON response
+    var aiData = null;
+    try {
+      var jsonStr = text.replace(/```json|```/g,'').trim();
+      aiData = JSON.parse(jsonStr);
+    } catch(e) { aiData = null; }
+
+    if(aiData) {
+      var signalColor = aiData.signal==='BUY' ? 'var(--gr)' : aiData.signal==='SELL' ? 'var(--r)' : 'var(--g)';
+      var signalEmoji = aiData.signal==='BUY' ? '🟢' : aiData.signal==='SELL' ? '🔴' : '🟡';
+      var tagsHtml = (aiData.tags||[]).map(function(tag){
+        return '<span style="background:rgba(0,255,136,.1);border:1px solid rgba(0,255,136,.25);border-radius:2px;padding:1px 6px;font-size:8px;color:var(--gr);font-family:var(--mono)">'+tag+'</span>';
+      }).join(' ');
+      var fs = aiData.scores ? Math.round((aiData.scores.smart_money*0.35)+(aiData.scores.narrative*0.30)+(aiData.scores.price_action*0.20)-(aiData.scores.risk*0.15)) : 0;
+      text =
+        signalEmoji+' <b>'+aiData.signal+'</b> · Confiança: <b>'+aiData.confidence+'%</b> · Score Final: <b>'+fs+'</b>\n\n'+
+        '⚡ EDGE: '+aiData.edge+'\n\n'+
+        '📋 REASONING: '+aiData.reason+'\n\n'+
+        '🎯 ENTRADA: '+(aiData.entry_price||'—')+'\n'+
+        '🛑 STOP LOSS: '+(aiData.stop_loss||'—')+'\n'+
+        '🎯 ALVO 1: '+(aiData.target_1||'—')+'\n'+
+        '🎯 ALVO 2: '+(aiData.target_2||'—')+'\n\n'+
+        '🏷 TAGS: '+(aiData.tags||[]).join(' · ');
+    }
     document.getElementById('aiText').textContent=text;
     document.getElementById('aiMetrics').innerHTML=[{l:'Moon 10x',v:p10+'%',c:p10>60?'var(--gr)':p10>40?'var(--g)':'var(--r)'},{l:'Moon 100x',v:p100+'%',c:p100>40?'var(--gr)':p100>20?'var(--g)':'var(--r)'},{l:'RSI',v:t.rsi,c:t.rsi<30?'var(--gr)':t.rsi>70?'var(--r)':'var(--a)'},{l:'Score',v:t.tier+' '+t.score,c:t.tier==='S'?'var(--p)':t.tier==='A'?'var(--g)':'var(--a)'}].map(function(m){return '<div style="background:var(--c);border:1px solid var(--b);border-radius:7px;padding:8px;text-align:center"><div style="font-family:Share Tech Mono,monospace;font-size:8px;color:var(--m)">'+m.l+'</div><div style="font-family:Orbitron,monospace;font-size:15px;font-weight:700;color:'+m.c+'">'+m.v+'</div></div>';}).join('');
     document.getElementById('aiLoading').style.display='none';
