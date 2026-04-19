@@ -1165,7 +1165,7 @@ body.login-open {
     <div class="sbox"><div class="sval" id="s-s" style="color:var(--p)">--</div><div class="slbl">S-TIER</div></div>
     <div class="sbox"><div class="sval" id="s-r" style="color:var(--gr)">--</div><div class="slbl">RSI REAL</div></div>
   </div>
-  <div class="ctrl">
+  <div class="ctrl" id="filterBtns">
     <input class="srch" type="text" id="srch" placeholder="🔍 buscar Alpha..." oninput="render()">
     <button class="fbtn on" onclick="setF('all',this)">TODOS</button>
     <button class="fbtn" onclick="setF('s',this)">🔮 S</button>
@@ -2303,7 +2303,7 @@ function updateStats(){
 // ═══════════════════════════════════════
 // RENDER SCANNER
 // ═══════════════════════════════════════
-function setF(f,el){filt=f;document.querySelectorAll('#pg-scanner .ctrl:first-of-type .fbtn').forEach(function(b){b.classList.remove('on');});el.classList.add('on');var sn=document.getElementById('smartNotice');if(sn)sn.style.display=f==='smart'?'block':'none';render();}
+function setF(f,el){filt=f;document.querySelectorAll('#filterBtns .fbtn').forEach(function(b){b.classList.remove('on');});el.classList.add('on');var sn=document.getElementById('smartNotice');if(sn)sn.style.display=f==='smart'?'block':'none';render();}
 function setChain(c,el){chainFilter=c;document.querySelectorAll('#pg-scanner .ctrl:nth-of-type(2) .fbtn').forEach(function(b){b.classList.remove('on');});el.classList.add('on');render();}
 function render(){
   var el=document.getElementById('list');
@@ -2327,7 +2327,7 @@ function render(){
       var frNeg   = t.fundingRate < 0;              // Funding rate negativo = pressão de compra
       var rsiOk   = t.rsi >= 40 && t.rsi <= 72;    // RSI não extremo
       var volOk   = t.vm >= 50;                     // Volume/MC alto
-      var notNew  = t.daysInAlpha == null || t.daysInAlpha >= 3; // Não estreante
+      var notNew  = t.daysInAlpha != null && t.daysInAlpha >= 3; // Não estreante (exclui tokens 'new')
       return isStier && isBSC && frNeg && rsiOk && volOk && notNew;
     }
     return true;
