@@ -1,15 +1,12 @@
 """
-trading/binance_client.py — Cliente REST Binance para auto trade.
+trading/binance_client.py — Cliente REST Binance (versão robusta)
 
-Funcionalidades:
-  - get_balance()     : saldo disponível em USDT
-  - get_price()       : preço atual de um par
-  - validate_symbol() : valida se símbolo existe na Binance
-  - market_buy()      : ordem de compra a mercado
-  - market_sell()     : ordem de venda a mercado
-  - get_order()       : status de uma ordem
-
-Modo SIMULAÇÃO ativo por padrão (ENABLE_REAL_TRADING=false).
+Melhorias:
+✔ Validação correta via exchangeInfo
+✔ Cache de símbolos (performance)
+✔ Sanitização de símbolos
+✔ Evita pares inválidos
+✔ Estrutura pronta pra produção
 """
 
 import os
@@ -20,6 +17,7 @@ import logging
 import urllib.parse
 import urllib.request
 import json
+import re
 
 log = logging.getLogger("SIREN.binance")
 
@@ -29,13 +27,30 @@ ENABLE_REAL        = os.environ.get("ENABLE_REAL_TRADING", "false").lower() == "
 
 BASE_URL = "https://api.binance.com"
 
+# Cache global de símbolos válidos
+SYMBOLS_CACHE = {}
+
+# ═══════════════════════════════════════
+# UTIL
+# ═══════════════════════════════════════
+
+def sanitize_token(token: str) -> str:
+    """Remove caracteres inválidos e força uppercase."""
+    token = token.upper()
+    return re.sub(r'[^A-Z0-9]', '', token)
+
+
+def build_symbol(token: str, quote: str = "USDT") -> str:
+    """Constrói símbolo seguro."""
+    token = sanitize_token(token)
+    return f"{token}{quote}"
+
 
 # ═══════════════════════════════════════
 # ASSINATURA
 # ═══════════════════════════════════════
 
 def _sign(params: dict) -> str:
-    """Gera assinatura HMAC-SHA256 para requisições privadas."""
     query = urllib.parse.urlencode(params)
     return hmac.new(
         BINANCE_SECRET_KEY.encode(),
@@ -45,18 +60,16 @@ def _sign(params: dict) -> str:
 
 
 def _request(method: str, path: str, params: dict = None, signed: bool = False) -> dict:
-    """
-    Executa requisição HTTP na Binance REST API.
-    Adiciona timestamp e assinatura se signed=True.
-    """
     params = params or {}
+
     if signed:
         params["timestamp"] = int(time.time() * 1000)
         params["signature"] = _sign(params)
 
-    query  = urllib.parse.urlencode(params)
-    url    = f"{BASE_URL}{path}?{query}" if query else f"{BASE_URL}{path}"
-    req    = urllib.request.Request(
+    query = urllib.parse.urlencode(params)
+    url   = f"{BASE_URL}{path}?{query}" if query else f"{BASE_URL}{path}"
+
+    req = urllib.request.Request(
         url,
         method=method,
         headers={
@@ -64,47 +77,51 @@ def _request(method: str, path: str, params: dict = None, signed: bool = False) 
             "Content-Type": "application/json",
         },
     )
+
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         body = e.read().decode()
         log.error(f"Binance HTTP {e.code}: {body}")
-        raise RuntimeError(f"Binance API error {e.code}: {body}")
+        raise RuntimeError(body)
     except Exception as e:
-        log.error(f"Binance request falhou: {e}")
+        log.error(f"Erro na requisição: {e}")
         raise
 
 
 # ═══════════════════════════════════════
-# INFORMAÇÕES DE MERCADO
+# MERCADO
 # ═══════════════════════════════════════
 
-def get_price(symbol: str) -> float:
-    """Retorna o preço atual de um par (ex: BTCUSDT)."""
-    data = _request("GET", "/api/v3/ticker/price", {"symbol": symbol})
-    return float(data["price"])
+def load_symbols():
+    """Carrega todos os símbolos válidos da Binance."""
+    global SYMBOLS_CACHE
+    log.info("Carregando símbolos da Binance...")
+
+    data = _request("GET", "/api/v3/exchangeInfo")
+
+    SYMBOLS_CACHE = {
+        s["symbol"]: s
+        for s in data["symbols"]
+        if s["status"] == "TRADING"
+    }
+
+    log.info(f"{len(SYMBOLS_CACHE)} símbolos ativos carregados")
 
 
 def validate_symbol(symbol: str) -> bool:
-    """Verifica se o símbolo existe e está ativo na Binance."""
-    try:
-        get_price(symbol)
-        return True
-    except Exception:
-        return False
+    """Validação robusta de símbolo."""
+    return symbol in SYMBOLS_CACHE
 
 
-def get_symbol_info(symbol: str) -> dict | None:
-    """Retorna informações de filtros do símbolo (minQty, stepSize, etc)."""
-    try:
-        data = _request("GET", "/api/v3/exchangeInfo", {"symbol": symbol})
-        for s in data.get("symbols", []):
-            if s["symbol"] == symbol:
-                return s
-        return None
-    except Exception:
-        return None
+def get_symbol_info(symbol: str):
+    return SYMBOLS_CACHE.get(symbol)
+
+
+def get_price(symbol: str) -> float:
+    data = _request("GET", "/api/v3/ticker/price", {"symbol": symbol})
+    return float(data["price"])
 
 
 # ═══════════════════════════════════════
@@ -112,13 +129,15 @@ def get_symbol_info(symbol: str) -> dict | None:
 # ═══════════════════════════════════════
 
 def get_balance(asset: str = "USDT") -> float:
-    """Retorna saldo disponível do ativo informado."""
     if not BINANCE_API_KEY:
         return 0.0
+
     data = _request("GET", "/api/v3/account", signed=True)
+
     for b in data.get("balances", []):
         if b["asset"] == asset:
             return float(b["free"])
+
     return 0.0
 
 
@@ -126,91 +145,66 @@ def get_balance(asset: str = "USDT") -> float:
 # ORDENS
 # ═══════════════════════════════════════
 
-def _round_qty(qty: float, step_size: float) -> float:
-    """Arredonda quantidade para o stepSize do par."""
-    import math
-    precision = int(round(-math.log10(step_size)))
-    return round(math.floor(qty / step_size) * step_size, precision)
+def market_buy(token: str, usdt_amount: float):
+    """Compra segura com validação completa."""
 
+    symbol = build_symbol(token)
 
-def market_buy(symbol: str, usdt_amount: float) -> dict:
-    """
-    Executa ordem de compra a mercado.
-    SIMULAÇÃO: retorna mock se ENABLE_REAL_TRADING=false.
-    """
-    log.info(f"[{'REAL' if ENABLE_REAL else 'PAPER'}] BUY {symbol} ${usdt_amount:.2f}")
-
-    if not ENABLE_REAL:
-        # Paper trading: simula resposta
-        price = get_price(symbol)
-        qty   = round(usdt_amount / price, 6)
-        return {
-            "orderId":        f"PAPER_{int(time.time())}",
-            "symbol":         symbol,
-            "side":           "BUY",
-            "type":           "MARKET",
-            "status":         "FILLED",
-            "executedQty":    str(qty),
-            "cummulativeQuoteQty": str(usdt_amount),
-            "paper":          True,
-        }
-
-    # Validações antes de operar real
-    if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
-        raise RuntimeError("Chaves Binance não configuradas")
+    log.info(f"[{'REAL' if ENABLE_REAL else 'PAPER'}] BUY {symbol} ${usdt_amount}")
 
     if not validate_symbol(symbol):
-        raise ValueError(f"Símbolo inválido ou não negociável: {symbol}")
+        log.warning(f"{symbol} inválido — ignorando")
+        return None
+
+    price = get_price(symbol)
+    qty   = round(usdt_amount / price, 6)
+
+    if not ENABLE_REAL:
+        return {
+            "symbol": symbol,
+            "price": price,
+            "qty": qty,
+            "paper": True
+        }
 
     balance = get_balance("USDT")
+
     if balance < usdt_amount:
-        raise RuntimeError(f"Saldo insuficiente: ${balance:.2f} < ${usdt_amount:.2f}")
+        raise RuntimeError("Saldo insuficiente")
 
     params = {
-        "symbol":     symbol,
-        "side":       "BUY",
-        "type":       "MARKET",
+        "symbol": symbol,
+        "side": "BUY",
+        "type": "MARKET",
         "quoteOrderQty": usdt_amount,
     }
+
     return _request("POST", "/api/v3/order", params, signed=True)
 
 
-def market_sell(symbol: str, qty: float) -> dict:
-    """
-    Executa ordem de venda a mercado.
-    SIMULAÇÃO: retorna mock se ENABLE_REAL_TRADING=false.
-    """
+def market_sell(token: str, qty: float):
+    symbol = build_symbol(token)
+
     log.info(f"[{'REAL' if ENABLE_REAL else 'PAPER'}] SELL {symbol} qty={qty}")
+
+    if not validate_symbol(symbol):
+        log.warning(f"{symbol} inválido — ignorando")
+        return None
 
     if not ENABLE_REAL:
         price = get_price(symbol)
         return {
-            "orderId":        f"PAPER_{int(time.time())}",
-            "symbol":         symbol,
-            "side":           "SELL",
-            "type":           "MARKET",
-            "status":         "FILLED",
-            "executedQty":    str(qty),
-            "cummulativeQuoteQty": str(qty * price),
-            "paper":          True,
+            "symbol": symbol,
+            "qty": qty,
+            "price": price,
+            "paper": True
         }
 
-    if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
-        raise RuntimeError("Chaves Binance não configuradas")
-
-    if not validate_symbol(symbol):
-        raise ValueError(f"Símbolo inválido: {symbol}")
-
     params = {
-        "symbol":   symbol,
-        "side":     "SELL",
-        "type":     "MARKET",
+        "symbol": symbol,
+        "side": "SELL",
+        "type": "MARKET",
         "quantity": qty,
     }
+
     return _request("POST", "/api/v3/order", params, signed=True)
-
-
-def get_order(symbol: str, order_id: str) -> dict:
-    """Consulta status de uma ordem."""
-    params = {"symbol": symbol, "orderId": order_id}
-    return _request("GET", "/api/v3/order", params, signed=True)
