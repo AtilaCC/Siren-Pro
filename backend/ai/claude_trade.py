@@ -41,6 +41,13 @@ PENALIZE fortemente:
 - Score inconsistente com os outros indicadores
 - BTC em tendência de baixa forte
 
+VOLUME RELATIVO (RVol) — SINAL DE ANTECIPAÇÃO:
+O campo rvol compara o volume atual com a média dos últimos 7 dias.
+- rvol >= 3.0 (SPIKE_EXTREMO) → movimento iminente ou em curso → valorize fortemente
+- rvol >= 2.0 (ACUMULACAO) → acumulação real → sinal de antecipação confiável
+- rvol >= 1.5 (ACIMA_MEDIA) → interesse crescente → positivo
+- rvol < 0.8 (FRACO) → sem interesse real → penalize
+
 EXCEÇÃO PRIORITÁRIA — PUMP COM VOLUME REAL:
 Se TODOS esses critérios forem verdadeiros simultaneamente:
   → chg_24h > 25%
@@ -255,6 +262,10 @@ async def claude_trade_decision(token: dict) -> dict:
         "btc_rsi":           btc_ctx.get("rsi", 50),
         "btc_chg_4h":        btc_ctx.get("chg_4h", 0),
         "btc_score_mult":    btc_ctx.get("score_mult", 1.0),
+        "rvol":              token.get("rvol", 1.0),
+        "rvol_label":        token.get("rvol_label", "SEM_HISTORICO"),
+        "vol_spike":         token.get("vol_spike", False),
+        "vol_antecip":       token.get("vol_antecip", False),
     }
 
     # Pré-filtro local — evita chamar API para casos óbvios
